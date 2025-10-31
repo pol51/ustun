@@ -7,7 +7,7 @@
 
 class StunServer {
   public:
-    StunServer(boost::asio::io_context& io, const uint16_t port);
+    StunServer(boost::asio::io_context& io, const uint16_t port, uint32_t delay_ms = 0);
     
      void stop();
 
@@ -23,4 +23,5 @@ class StunServer {
     boost::asio::ip::udp::socket _socket;
     boost::asio::ip::udp::endpoint _remote;
     std::array<uint8_t, 1024> _buffer{};
+    uint32_t _delay_ms = 0;
 };

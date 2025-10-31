@@ -43,8 +43,9 @@ struct XorMappedAddressIPv6
 };
 #pragma pack(pop)
 
-StunServer::StunServer(boost::asio::io_context& io, const uint16_t port)
+StunServer::StunServer(boost::asio::io_context& io, const uint16_t port, uint32_t delay_ms)
     : _socket(io, udp::endpoint(udp::v4(), port))
+    , _delay_ms(delay_ms)
 {
   spdlog::info("STUN server listening on UDP port {}", port);
   startReceive();
@@ -90,7 +91,8 @@ void StunServer::handlePacket(const std::size_t bytes)
     return;
   }
 
-  spdlog::info("Received Binding Request from {}", remoteStr);
+  spdlog::info(
+      "Received Binding Request from {}, scheduling response in {}ms", remoteStr, _delay_ms);
 
   std::vector<uint8_t> attrs;
   buildXorMappedAttr(attrs, _remote, hdr->trans_id);
@@ -101,16 +103,29 @@ void StunServer::handlePacket(const std::size_t bytes)
   resp_hdr.cookie = htonl(MAGIC_COOKIE);
   std::memcpy(resp_hdr.trans_id, hdr->trans_id, 12);
 
-  std::vector<uint8_t> resp(sizeof(resp_hdr));
-  std::memcpy(resp.data(), &resp_hdr, sizeof(resp_hdr));
-  resp.insert(resp.end(), attrs.begin(), attrs.end());
+  auto resp = std::make_shared<std::vector<uint8_t>>(sizeof(resp_hdr) + attrs.size());
+  std::memcpy(resp->data(), &resp_hdr, sizeof(resp_hdr));
+  std::memcpy(resp->data() + sizeof(resp_hdr), attrs.data(), attrs.size());
 
-  _socket.async_send_to(boost::asio::buffer(resp), _remote,
-      [remote = _remote, remoteStr](boost::system::error_code ec, std::size_t) {
+  auto remote = std::make_shared<boost::asio::ip::udp::endpoint>(_remote);
+
+  auto timer = std::make_shared<boost::asio::steady_timer>(_socket.get_executor());
+  timer->expires_after(std::chrono::milliseconds(_delay_ms));
+  timer->async_wait(
+      [this, timer, resp, remote, remoteStr = std::move(remoteStr)](boost::system::error_code ec) {
         if (ec)
-          spdlog::warn("Failed to send response to {}: {}", remoteStr, ec.message());
-        else
-          spdlog::debug("Sent Binding Success to {}", remoteStr);
+        {
+          spdlog::warn("Timer error for {}: {}", remoteStr, ec.message());
+          return;
+        }
+
+        _socket.async_send_to(boost::asio::buffer(*resp), *remote,
+            [remoteStr = std::move(remoteStr)](boost::system::error_code send_ec, std::size_t) {
+              if (send_ec)
+                spdlog::warn("Failed to send response to {}: {}", remoteStr, send_ec.message());
+              else
+                spdlog::debug("Sent delayed Binding Success to {}", remoteStr);
+            });
       });
 }
 
