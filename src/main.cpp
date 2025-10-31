@@ -12,8 +12,11 @@ int main(int argc, char* argv[])
 
     spdlog::set_level(spdlog::level::debug);
 
+    uint32_t delay_ms =
+        getenv("DELAY_MS") ? static_cast<uint16_t>(std::stoi(getenv("DELAY_MS"))) : 0;
+
     boost::asio::io_context io;
-    StunServer server(io, port);
+    StunServer server(io, port, delay_ms);
 
     boost::asio::signal_set signals(io, SIGINT, SIGTERM);
     signals.async_wait([&](const boost::system::error_code&, int signal) {
