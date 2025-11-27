@@ -1,5 +1,6 @@
 #include "stunServer.hpp"
 
+#include <random>
 #include <spdlog/spdlog.h>
 
 
@@ -43,9 +44,11 @@ struct XorMappedAddressIPv6
 };
 #pragma pack(pop)
 
-StunServer::StunServer(boost::asio::io_context& io, const uint16_t port, uint32_t delay_ms)
+StunServer::StunServer(boost::asio::io_context& io, const uint16_t port, uint32_t delay_ms,
+    uint32_t max_delay_offset_ms)
     : _socket(io, udp::endpoint(udp::v4(), port))
     , _delay_ms(delay_ms)
+    , _max_delay_offset_ms(max_delay_offset_ms)
 {
   spdlog::info("STUN server listening on UDP port {}", port);
   startReceive();
@@ -91,8 +94,13 @@ void StunServer::handlePacket(const std::size_t bytes)
     return;
   }
 
+  static std::random_device rd;
+  static std::mt19937 gen(rd());
+  static std::uniform_int_distribution<int32_t> dist(-_max_delay_offset_ms, _max_delay_offset_ms);
+  auto delay_ms = _delay_ms + dist(gen);
+
   spdlog::info(
-      "Received Binding Request from {}, scheduling response in {}ms", remoteStr, _delay_ms);
+      "Received Binding Request from {}, scheduling response in {}ms", remoteStr, delay_ms);
 
   std::vector<uint8_t> attrs;
   buildXorMappedAttr(attrs, _remote, hdr->trans_id);
@@ -110,7 +118,7 @@ void StunServer::handlePacket(const std::size_t bytes)
   auto remote = std::make_shared<boost::asio::ip::udp::endpoint>(_remote);
 
   auto timer = std::make_shared<boost::asio::steady_timer>(_socket.get_executor());
-  timer->expires_after(std::chrono::milliseconds(_delay_ms));
+  timer->expires_after(std::chrono::milliseconds(delay_ms));
   timer->async_wait(
       [this, timer, resp, remote, remoteStr = std::move(remoteStr)](boost::system::error_code ec) {
         if (ec)
